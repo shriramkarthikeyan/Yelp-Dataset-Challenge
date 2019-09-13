@@ -1,0 +1,570 @@
+---
+title: "All code"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r}
+library(gmodels)
+setwd("C:\\Users\\shrir\\Google Drive (karthikeyan.s@husky.neu.edu)\\IE 7275 Data Mining\\Case Study")
+
+df2<-data.frame(read.csv2("Yelp_Dataset.csv"))
+df2<-df2[,-1]
+df2<-df2[complete.cases(df2),]
+
+#Create dummy variables
+library(fastDummies)
+set.seed(100)
+#Create dummies
+dum<-dummy_cols(df2, select_columns = c("Categories.2", "attributes.NoiseLevel",
+"attributes.RestaurantsPriceRange2","Ambience", "attributes.WiFi", "attributes.Alcohol",
+"attributes.RestaurantsAttire"), remove_first_dummy = TRUE)
+dum2<-dum[,-c(11,15,17,20,21,22,23)]
+dum2$user_stars<-as.factor(dum2$user_stars)
+colnames(dum2)[37] <- "Categories.2_Fast_Food"
+colnames(dum2)[43]<-"Categories.2_Ice_Cream"
+colnames(dum2)[41]<-"Categories.2_Middle_East"
+colnames(dum2)[40]<-"Categories.2_Non_Alcoholic_Drinks"
+
+
+#Turn all categorical variables to factors
+cols<-c(10:19,27:63)
+dum2[cols]<-lapply(dum2[cols], factor)
+
+#Select 10% of total data
+set.seed(100) # set seed for reproducing the partition
+dum3<-dum2[sample(nrow(dum2), nrow(dum2)*0.1), ]
+dum4<-dum2[sample(nrow(dum2), nrow(dum2)*0.0001), ]
+
+
+
+#Separate continious variables and evaluate correlation
+library(car)
+cont_df<-dum3[,c(3:9,20:26)]
+cont_df1<-dum4[,c(3:9)]
+cont_df2<-dum4[,c(20,21,22,23,24,25,26)]
+#Evaluate behavior between variables with scatterplotMatrix
+scatterplotMatrix(cont_df1, ellipse = FALSE,col=c("black"),
+                  regLine = list(method=lm, lty=1, lwd=2, col="red"),
+                  smooth=list(smoother=loessLine, spread=FALSE, lty.smooth=2, lwd.smooth=1, col.smooth="black"), 
+                  main="Scatter Plot Matrix")
+scatterplotMatrix(cont_df2, ellipse = FALSE,col=c("black"),
+                  regLine = list(method=lm, lty=1, lwd=2, col="red"),
+                  smooth=list(smoother=loessLine, spread=FALSE, lty.smooth=2, lwd.smooth=1, col.smooth="black"), 
+                  main="Scatter Plot Matrix")
+#The scatterplot show existing correlation between predictors that make it suitable for PCA dimension reduction
+#Evaluate correlation between variables
+library(reshape)
+library(ggplot2)
+cormat<-round(cor(cont_df),2)
+melted_cormat<-melt(cormat)
+melted_cormat
+ggplot(data = melted_cormat, aes(x=X1, y=X2, fill=value)) + geom_tile()+
+  geom_text(aes(X2, X1, label = value), color = "black", size = 4)
+
+#PCA
+library(psych)
+library(GPArotation)
+cont_df<-dum3[,c(3:9,20:26)]
+colnames(cont_df)
+#Input the raw data matrix to fa.parallel() function to determine the number of components to extract
+fa.parallel(cont_df, fa="pc", main = "Scree plot
+            with parallel analysis",show.legend=TRUE,ylabel="eigenvalues")
+abline(1,0)
+pc1<-principal(cont_df, nfactors = 7, rotate = "none" , scores = TRUE)
+pc1$loadings
+pc<-data.frame(pc1$scores)
+
+#The 5 PC will substitute 
+#useful.x       funny.x        cool.x         latitude       longitude     
+#review_count.x review_count.y useful.y       funny.y        cool.y        
+#fans           compliment_hot   Busieness_Stars    average_stars
+
+pc_dum<-data.frame(dum3[,-c(3:9,20:26)])
+
+pc_dum$PC1<-pc$PC1
+pc_dum$PC2<-pc$PC2
+pc_dum$PC3<-pc$PC3
+pc_dum$PC4<-pc$PC4
+pc_dum$PC5<-pc$PC5
+pc_dum$PC6<-pc$PC6
+pc_dum$PC7<-pc$PC7
+
+# partition data, 50% Training, 30% Validation, 20% Test
+# Set some input variables to define the splitting.
+
+# Input 2. Set the fractions of the dataframe you want to split into training, 
+# validation, and test.
+fractionTraining   <- 0.5
+fractionValidation <- 0.3
+fractionTest       <- 0.2
+
+# Compute sample sizes.
+sampleSizeTraining   <- floor(fractionTraining   * nrow(pc_dum))
+sampleSizeValidation <- floor(fractionValidation * nrow(pc_dum))
+sampleSizeTest       <- floor(fractionTest       * nrow(pc_dum))
+
+# Create the randomly-sampled indices for the dataframe. Use setdiff() to
+# avoid overlapping subsets of indices.
+indicesTraining    <- sort(sample(seq_len(nrow(pc_dum)), size=sampleSizeTraining))
+indicesNotTraining <- setdiff(seq_len(nrow(pc_dum)), indicesTraining)
+indicesValidation  <- sort(sample(indicesNotTraining, size=sampleSizeValidation))
+indicesTest        <- setdiff(indicesNotTraining, indicesValidation)
+
+# Finally, output the three dataframes for training, validation and test.
+train.df <- pc_dum[indicesTraining, ]
+valid.df <- pc_dum[indicesValidation, ]
+test.df <- pc_dum[indicesTest, ]
+
+##############################################Classification Tree################################
+
+library(rpart)
+library(rpart.plot)
+
+class.tree <- rpart(user_stars ~.-X ,data = train.df, method = "class", cp=0.001)
+rpart.plot(class.tree, type =1, digits = 3, fallen.leaves = TRUE)
+pruned.tree.class <- prune(class.tree,
+cp = class.tree$cptable[which.min(class.tree$cptable[,"xerror"]),"CP"])
+rpart.plot(pruned.tree.class, type =1, digits = 3, fallen.leaves = TRUE)
+p1_tree<-predict(pruned.tree.class, train.df)
+p1_tree_val<-predict(pruned.tree.class,valid.df)
+p1_tree_test<-predict(pruned.tree.class, test.df)
+
+library(caret)
+
+predicted<-as.data.frame(cbind(row.names(p1_tree),apply(p1_tree,1,function(x)
+  colnames(p1_tree)[which(x==max(x))])))
+conf.matrix.train<-confusionMatrix(factor(predicted$V2),factor(train.df$user_stars))
+
+predicted_valid<-as.data.frame(cbind(row.names(p1_tree_val),apply(p1_tree_val,1,function(x)
+  colnames(p1_tree_val)[which(x==max(x))])))
+conf.matrix.valid<-confusionMatrix(factor(predicted_valid$V2),factor(valid.df$user_stars))
+
+CrossTable(x = valid.df[,2], y =predicted_valid$V2, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+predicted_test<-as.data.frame(cbind(row.names(p1_tree_test),apply(p1_tree_test,1,function(x)
+  colnames(p1_tree_test)[which(x==max(x))])))
+conf.matrix.test<-confusionMatrix(factor(predicted_test$V2),factor(test.df$user_stars))
+
+###############################################Random Forests##################################
+library(randomForest)
+library(ggplot2)
+library(cowplot)
+
+#Reduce data set size for random forest
+train.forest<-train.df[sample(nrow(train.df), nrow(train.df)*0.2), ]
+
+rf<-randomForest(user_stars~.-X, data=train.forest, ntree=100, mtry=4, nodesize=10, importance=TRUE)
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(rf$err.rate), times=3),
+  Type=rep(c("OOB", "1", "2", "3", "4", "5"), each=nrow(rf$err.rate)),
+  Error=c(rf$err.rate[,"OOB"],
+          rf$err.rate[,2],
+          rf$err.rate[,3],
+          rf$err.rate[,4],
+          rf$err.rate[,5],
+          rf$err.rate[,6]))
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +geom_line(aes(color=Type))
+
+rf.valid<-predict(rf, valid.df[,-2])
+conf.rf.valid<- confusionMatrix(rf.valid  , factor(valid.df[, 2]))
+CrossTable(x = valid.df[,2], y =rf.valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+
+
+
+######################################################knn#####################################
+library(caret)
+library(FNN)
+
+train.knn<-train.df[sample(nrow(train.df), nrow(train.df)*0.05), ]
+valid.knn<-valid.df[sample(nrow(valid.df), nrow(valid.df)*0.05), ]
+
+training<-model.matrix(~.-user_stars-X, data = train.knn)
+validation<-model.matrix(~.-user_stars-X, data=valid.knn)
+
+kn<-knn(training, test = validation, cl=train.knn[,2], k=1)
+conf.matrix.kn<- confusionMatrix(kn, factor(valid.knn[, 2]))
+
+accuracy.df<-data.frame(k=seq(1,50,1),accuracy=rep(0,50))
+
+for(i in 1:50){
+  knn2 <- knn(training, test=validation,cl = train.knn[,2], k = i)
+accuracy.df[i,2]<-confusionMatrix(knn2, factor(valid.knn[,2]))$overall[1]
+}
+
+plot(accuracy.df, type="line", col="blue")
+#best knn is k = 30
+
+kn.train<-knn(training, test = validation, cl=train.knn[,2], k=30)
+conf.kn.train<- confusionMatrix(kn.train, factor(valid.knn[, 2]))
+CrossTable(x = valid.knn[,2], y =kn.train, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+
+#####################################Naive Bayes#############################################
+library(e1071)
+nb_model<-naiveBayes(user_stars~.-X, data = train.df)
+#Test the model using the validation data
+nb_model_train<-predict(nb_model, train.df[,-2])
+#Confusion matrix
+confussion.train<-confusionMatrix(nb_model_train, train.df$user_stars)$overall[1]
+CrossTable(x = nb_model_train, y =train.df$user_stars, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+nb_model_valid<-predict(nb_model, valid.df[,-2])
+#Confusion matrix
+confussion.valid<-confusionMatrix(nb_model_valid, valid.df$user_stars)
+CrossTable(x =valid.df$user_stars , y =nb_model_valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+
+#####################################################LDA#####################################
+library(MASS)
+lda <- lda(user_stars~.-X, train.df)
+lda.predict.train <- predict(lda, train.df[,-2])
+lda.confusion.train<-confusionMatrix(lda.predict.train$class, train.df$user_stars)
+CrossTable(x = train.df$user_stars, y =lda.predict.train$class, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+lda.predict.valid <- predict(lda, valid.df[,-2])
+lda.confusion.valid<-confusionMatrix(lda.predict.valid$class, valid.df$user_stars)
+CrossTable(x =lda.predict.valid$class , y =valid.df$user_stars, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+#######################################################################################################
+#BINARY CLASSIFICATION APPROACH
+#Binary approach
+###################################################################Equal to 5################ 
+#Create binary stars classification
+train.df$binary<-ifelse(as.numeric(train.df$user_stars)==5,1,0)
+train.df$binary<-as.factor(train.df$binary)
+valid.df$binary<-ifelse(as.numeric(valid.df$user_stars)==5,1,0)
+valid.df$binary<-as.factor(valid.df$binary)
+
+#Logistic regression
+
+pred_log<-glm(binary~.-user_stars-X, data = train.df, family = "binomial")
+log_pred<-predict(pred_log, valid.df[,-58], type="response")
+
+predict<-ifelse(log_pred>0.5,1,0)
+CrossTable(x =valid.df$binary , y =predict, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+
+#Random Forest
+library(randomForest)
+train.forest<-train.df[sample(nrow(train.df), nrow(train.df)*0.2), ]
+
+rf<-randomForest(binary~.-X-user_stars, data=train.forest, ntree=100, mtry=4, nodesize=10, importance=TRUE)
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(rf$err.rate), times=3),
+  Type=rep(c("OOB", "Negative rating", "Positive rating"), each=nrow(rf$err.rate)),
+  Error=c(rf$err.rate[,"OOB"],
+          rf$err.rate[,2],
+          rf$err.rate[,3]))
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +geom_line(aes(color=Type))
+#100 forests is enough
+
+colnames(valid.df)
+
+rf.valid<-predict(rf, valid.df[,-58])
+conf.rf.valid<- confusionMatrix(rf.valid  , factor(valid.df[, 58]))
+CrossTable(x = valid.df[,2], y =rf.valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+#Decision Trees
+train.df2<-train.df[,-2]
+valid.df2<-valid.df[,-2]
+class.tree <- rpart(binary ~.-X ,data = train.df2, method = "class", cp=0.001)
+pruned.tree.class <- prune(class.tree,
+                           cp = class.tree$cptable[which.min(class.tree$cptable[,"xerror"]),"CP"])
+p1_tree_val<-predict(pruned.tree.class,valid.df2)
+
+predicted_valid<-as.data.frame(cbind(row.names(p1_tree_val),apply(p1_tree_val,1,function(x)
+  colnames(p1_tree_val)[which(x==max(x))])))
+conf.matrix.valid<-confusionMatrix(factor(predicted_valid$V2),factor(valid.df2$binary))
+
+##################knn
+
+library(FNN)
+
+train.knn<-train.df[sample(nrow(train.df), nrow(train.df)*0.05), ]
+valid.knn<-valid.df[sample(nrow(valid.df), nrow(valid.df)*0.05), ]
+
+training<-model.matrix(~.-user_stars-X-binary, data = train.knn)
+validation<-model.matrix(~.-user_stars-X-binary, data=valid.knn)
+
+kn<-knn(training, test = validation, cl=train.knn[,58], k=30)
+conf.matrix.kn<- confusionMatrix(kn, factor(valid.knn[, 58]))
+
+#######################Naive Bayes
+library(e1071)
+colnames(train.df2)
+nb_model<-naiveBayes(binary~.-X, data = train.df2)
+#Test the model using the validation data
+nb_model_valid<-predict(nb_model, valid.df2[,-57])
+
+#Confusion matrix
+confussion.valid<-confusionMatrix(nb_model_valid, valid.df2$binary)
+CrossTable(x =valid.df$binary , y =nb_model_valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+
+# Input 2. Set the fractions of the dataframe you want to split into training, 
+# validation, and test.
+fractionTraining   <- 0.5
+fractionValidation <- 0.3
+fractionTest       <- 0.2
+
+# Compute sample sizes.
+sampleSizeTraining   <- floor(fractionTraining   * nrow(pc_dum))
+sampleSizeValidation <- floor(fractionValidation * nrow(pc_dum))
+sampleSizeTest       <- floor(fractionTest       * nrow(pc_dum))
+
+# Create the randomly-sampled indices for the dataframe. Use setdiff() to
+# avoid overlapping subsets of indices.
+indicesTraining    <- sort(sample(seq_len(nrow(pc_dum)), size=sampleSizeTraining))
+indicesNotTraining <- setdiff(seq_len(nrow(pc_dum)), indicesTraining)
+indicesValidation  <- sort(sample(indicesNotTraining, size=sampleSizeValidation))
+indicesTest        <- setdiff(indicesNotTraining, indicesValidation)
+
+# Finally, output the three dataframes for training, validation and test.
+train.df <- pc_dum[indicesTraining, ]
+valid.df <- pc_dum[indicesValidation, ]
+test.df <- pc_dum[indicesTest, ]
+
+########################################################Bigger or equal to 4################
+#Create binary stars classification
+train.df$binary<-ifelse(as.numeric(train.df$user_stars)>=4,1,0)
+train.df$binary<-as.factor(train.df$binary)
+valid.df$binary<-ifelse(as.numeric(valid.df$user_stars)>=4,1,0)
+valid.df$binary<-as.factor(valid.df$binary)
+
+#Logistic regression
+
+pred_log<-glm(binary~.-user_stars-X, data = train.df, family = "binomial")
+log_pred<-predict(pred_log, valid.df[,-58], type="response")
+
+predict<-ifelse(log_pred>0.5,1,0)
+CrossTable(x =valid.df$binary , y =predict, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+conf.log.valid<- confusionMatrix(factor(predict), factor(valid.df$binary))
+
+
+#Random Forest
+train.forest<-train.df[sample(nrow(train.df), nrow(train.df)*0.2), ]
+
+rf<-randomForest(binary~.-X-user_stars, data=train.forest, ntree=100, mtry=4, nodesize=10, importance=TRUE)
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(rf$err.rate), times=3),
+  Type=rep(c("OOB", "Negative rating", "Positive rating"), each=nrow(rf$err.rate)),
+  Error=c(rf$err.rate[,"OOB"],
+          rf$err.rate[,2],
+          rf$err.rate[,3]))
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +geom_line(aes(color=Type))
+#100 forests is enough
+
+rf.valid<-predict(rf, valid.df[,-58])
+conf.rf.valid<- confusionMatrix(rf.valid  , factor(valid.df[, 58]))
+CrossTable(x = valid.df[,2], y =rf.valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+#Decision Trees
+train.df2<-train.df[,-2]
+valid.df2<-valid.df[,-2]
+class.tree <- rpart(binary ~.-X ,data = train.df2, method = "class", cp=0.001)
+pruned.tree.class <- prune(class.tree,
+                           cp = class.tree$cptable[which.min(class.tree$cptable[,"xerror"]),"CP"])
+p1_tree_val<-predict(pruned.tree.class,valid.df2)
+
+predicted_valid<-as.data.frame(cbind(row.names(p1_tree_val),apply(p1_tree_val,1,function(x)
+  colnames(p1_tree_val)[which(x==max(x))])))
+conf.matrix.valid<-confusionMatrix(factor(predicted_valid$V2),factor(valid.df2$binary))
+
+##################knn
+
+train.knn<-train.df[sample(nrow(train.df), nrow(train.df)*0.05), ]
+valid.knn<-valid.df[sample(nrow(valid.df), nrow(valid.df)*0.05), ]
+
+training<-model.matrix(~.-user_stars-X-binary, data = train.knn)
+validation<-model.matrix(~.-user_stars-X-binary, data=valid.knn)
+
+kn<-knn(training, test = validation, cl=train.knn[,58], k=30)
+conf.matrix.kn<- confusionMatrix(kn, factor(valid.knn[, 58]))
+
+#######################Naive Bayes
+nb_model<-naiveBayes(binary~.-X, data = train.df2)
+#Test the model using the validation data
+nb_model_valid<-predict(nb_model, valid.df2[,-57])
+
+#Confusion matrix
+confussion.valid<-confusionMatrix(nb_model_valid, valid.df2$binary)
+CrossTable(x =valid.df$binary , y =nb_model_valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+
+#############################################################################################
+
+# Input 2. Set the fractions of the dataframe you want to split into training, 
+# validation, and test.
+fractionTraining   <- 0.5
+fractionValidation <- 0.3
+fractionTest       <- 0.2
+
+# Compute sample sizes.
+sampleSizeTraining   <- floor(fractionTraining   * nrow(pc_dum))
+sampleSizeValidation <- floor(fractionValidation * nrow(pc_dum))
+sampleSizeTest       <- floor(fractionTest       * nrow(pc_dum))
+
+# Create the randomly-sampled indices for the dataframe. Use setdiff() to
+# avoid overlapping subsets of indices.
+indicesTraining    <- sort(sample(seq_len(nrow(pc_dum)), size=sampleSizeTraining))
+indicesNotTraining <- setdiff(seq_len(nrow(pc_dum)), indicesTraining)
+indicesValidation  <- sort(sample(indicesNotTraining, size=sampleSizeValidation))
+indicesTest        <- setdiff(indicesNotTraining, indicesValidation)
+
+# Finally, output the three dataframes for training, validation and test.
+train.df <- pc_dum[indicesTraining, ]
+valid.df <- pc_dum[indicesValidation, ]
+test.df <- pc_dum[indicesTest, ]
+
+########################################################Bigger or equal to 3################
+#Create binary stars classification
+train.df$binary<-ifelse(as.numeric(train.df$user_stars)>=3,1,0)
+train.df$binary<-as.factor(train.df$binary)
+valid.df$binary<-ifelse(as.numeric(valid.df$user_stars)>=3,1,0)
+valid.df$binary<-as.factor(valid.df$binary)
+
+#Logistic regression
+
+pred_log<-glm(binary~.-user_stars-X, data = train.df, family = "binomial")
+log_pred<-predict(pred_log, valid.df[,-58], type="response")
+
+predict<-ifelse(log_pred>0.5,1,0)
+CrossTable(x =valid.df$binary , y =predict, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+conf.log.valid<- confusionMatrix(factor(predict), factor(valid.df$binary))
+
+
+#Random Forest
+train.forest<-train.df[sample(nrow(train.df), nrow(train.df)*0.2), ]
+
+rf<-randomForest(binary~.-X-user_stars, data=train.forest, ntree=100, mtry=4, nodesize=10, importance=TRUE)
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(rf$err.rate), times=3),
+  Type=rep(c("OOB", "Negative rating", "Positive rating"), each=nrow(rf$err.rate)),
+  Error=c(rf$err.rate[,"OOB"],
+          rf$err.rate[,2],
+          rf$err.rate[,3]))
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +geom_line(aes(color=Type))
+#100 forests is enough
+
+rf.valid<-predict(rf, valid.df[,-58])
+conf.rf.valid<- confusionMatrix(rf.valid  , factor(valid.df[, 58]))
+CrossTable(x = valid.df[,58], y =rf.valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+#Decision Trees
+train.df2<-train.df[,-2]
+valid.df2<-valid.df[,-2]
+class.tree <- rpart(binary ~.-X ,data = train.df2, method = "class", cp=0.001)
+pruned.tree.class <- prune(class.tree,
+                           cp = class.tree$cptable[which.min(class.tree$cptable[,"xerror"]),"CP"])
+p1_tree_val<-predict(pruned.tree.class,valid.df2)
+
+predicted_valid<-as.data.frame(cbind(row.names(p1_tree_val),apply(p1_tree_val,1,function(x)
+  colnames(p1_tree_val)[which(x==max(x))])))
+conf.matrix.valid<-confusionMatrix(factor(predicted_valid$V2),factor(valid.df2$binary))
+
+##################knn
+
+train.knn<-train.df[sample(nrow(train.df), nrow(train.df)*0.05), ]
+valid.knn<-valid.df[sample(nrow(valid.df), nrow(valid.df)*0.05), ]
+
+training<-model.matrix(~.-user_stars-X-binary, data = train.knn)
+validation<-model.matrix(~.-user_stars-X-binary, data=valid.knn)
+
+kn<-knn(training, test = validation, cl=train.knn[,58], k=30)
+conf.matrix.kn<- confusionMatrix(kn, factor(valid.knn[, 58]))
+
+#######################Naive Bayes
+nb_model<-naiveBayes(binary~.-X, data = train.df2)
+#Test the model using the validation data
+nb_model_valid<-predict(nb_model, valid.df2[,-57])
+
+#Confusion matrix
+confussion.valid<-confusionMatrix(nb_model_valid, valid.df2$binary)
+CrossTable(x =valid.df$binary , y =nb_model_valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+########################################################Final Evaluation#####################
+# Input 2. Set the fractions of the dataframe you want to split into training, 
+# validation, and test.
+fractionTraining   <- 0.5
+fractionValidation <- 0.3
+fractionTest       <- 0.2
+
+# Compute sample sizes.
+sampleSizeTraining   <- floor(fractionTraining   * nrow(pc_dum))
+sampleSizeValidation <- floor(fractionValidation * nrow(pc_dum))
+sampleSizeTest       <- floor(fractionTest       * nrow(pc_dum))
+
+# Create the randomly-sampled indices for the dataframe. Use setdiff() to
+# avoid overlapping subsets of indices.
+indicesTraining    <- sort(sample(seq_len(nrow(pc_dum)), size=sampleSizeTraining))
+indicesNotTraining <- setdiff(seq_len(nrow(pc_dum)), indicesTraining)
+indicesValidation  <- sort(sample(indicesNotTraining, size=sampleSizeValidation))
+indicesTest        <- setdiff(indicesNotTraining, indicesValidation)
+
+# Finally, output the three dataframes for training, validation and test.
+train.df <- pc_dum[indicesTraining, ]
+valid.df <- pc_dum[indicesValidation, ]
+test.df <- pc_dum[indicesTest, ]
+
+#Create binary stars classification
+train.df$binary<-ifelse(as.numeric(train.df$user_stars)>=4,1,0)
+train.df$binary<-as.factor(train.df$binary)
+valid.df$binary<-ifelse(as.numeric(valid.df$user_stars)>=4,1,0)
+valid.df$binary<-as.factor(valid.df$binary)
+
+#Random Forest
+train.forest<-train.df[sample(nrow(train.df), nrow(train.df)*0.2), ]
+
+rf<-randomForest(binary~.-X-user_stars, data=train.forest, ntree=100, mtry=4, nodesize=10, importance=TRUE)
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(rf$err.rate), times=3),
+  Type=rep(c("OOB", "Negative rating", "Positive rating"), each=nrow(rf$err.rate)),
+  Error=c(rf$err.rate[,"OOB"],
+          rf$err.rate[,2],
+          rf$err.rate[,3]))
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +geom_line(aes(color=Type))
+#100 forests is enough
+
+rf.valid<-predict(rf, valid.df[,-58], type="class")
+
+conf.rf.valid<- confusionMatrix(rf.valid  , factor(valid.df[, 58]))
+CrossTable(x = valid.df[,58], y =rf.valid, prop.chisq =FALSE,
+           prop.c = FALSE, prop.t = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+
+library(ROCR)
+v<-c(pred=rf.valid)
+pred<-prediction(v,valid.df[,58])
+gain<-performance(pred,"tpr","fpr" )
+proportion<-data.frame(table(valid.df$binary))
+cutoff<-proportion$Freq[1]/(proportion$Freq[2]+proportion$Freq[1])
+plot(x=c(0, 1), y=c(0, 1), type="l", col="black", lwd=1,
+     ylab="True Positive Rate", 
+     xlab="Rate of Positive Predictions", main="Gain Chart")
+lines(x=c(0, cutoff, 1), y=c(0, 1, 1), col="darkgreen", lwd=1)
+gain.x = unlist(slot(gain, 'x.values'))
+gain.y = unlist(slot(gain, 'y.values'))
+lines(x=gain.x, y=gain.y, col="blue", lwd=2)
+
+
+
+
+```
+
+
